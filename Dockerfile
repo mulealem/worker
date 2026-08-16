@@ -23,8 +23,10 @@ RUN npm install --omit=dev --no-audit && npm cache clean --force
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
 COPY tsconfig.json ./
 COPY src ./src
+COPY lib ./lib
 RUN npm run build
 
 FROM node:22-alpine AS runner
@@ -46,4 +48,5 @@ EXPOSE 3004
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${PORT:-3004}/health || exit 1
 
-CMD ["node", "dist/server.js"]
+# tsconfig rootDir is ".", so tsc emits src/ and lib/ under dist/.
+CMD ["node", "dist/src/server.js"]

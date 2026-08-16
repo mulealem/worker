@@ -47,8 +47,8 @@ POSTs jobs and the worker calls back at
 3. Deploy. The container:
    - `npm install --no-audit` (dev dependencies included — the Dockerfile
      overrides the build-time `NODE_ENV=production` for the install step)
-   - `npm run build` (runs `tsc` → `dist/server.js`)
-   - `node dist/server.js` on `:3004`
+   - `npm run build` (runs `tsc` → `dist/src/server.js`)
+   - `node dist/src/server.js` on `:3004`
 4. Test: visit `https://worker.payment.et/health` — expect
    `{"status":"ok","service":"pygate-worker","dashboardUp":true,…}`.
 
