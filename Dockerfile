@@ -10,10 +10,19 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 FROM base AS deps
+# Coolify injects NODE_ENV=production into the build environment, which makes
+# npm skip devDependencies (typescript, @types/*, ...) that the builder needs
+# below. Force a development install in this stage.
+ENV NODE_ENV=development
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm install --no-audit
+
+FROM base AS prod-deps
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev --no-audit && npm cache clean --force
 
 FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
@@ -26,7 +35,7 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 worker
 
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY package.json ./
@@ -35,6 +44,6 @@ USER worker
 EXPOSE 3004
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3004}/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${PORT:-3004}/health || exit 1
 
 CMD ["node", "dist/server.js"]
