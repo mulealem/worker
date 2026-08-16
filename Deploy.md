@@ -69,5 +69,5 @@ POSTs jobs and the worker calls back at
   drain anything queued while it was down. After that, it idles until
   the dashboard pushes.
 - `/health` always returns 200 if the process is alive, even if the
-  dashboard is briefly unreachable — but with `dashboardUp: false`
-  (503 in that case). Use this for the Coolify healthcheck.
+  dashboard is unreachable — in that case `dashboardUp: false` with
+  `status: "degraded"`. Use this for the Coolify healthcheck.

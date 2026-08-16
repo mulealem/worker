@@ -2,9 +2,12 @@
  * `GET /health` — liveness probe.
  *
  * Unauthenticated (Coolify and other orchestrators need to reach this
- * without a credential). Reports whether the worker is running and can
- * reach the dashboard's worker API. Queue depth checks live on the
- * dashboard side (it owns the tables), so this endpoint stays cheap.
+ * without a credential). Always returns 200 while the process is alive —
+ * a rolling update must not be rolled back just because the dashboard is
+ * briefly unreachable. Dashboard reachability is reported via the
+ * `dashboardUp` / `status: "degraded"` fields instead. Queue depth checks
+ * live on the dashboard side (it owns the tables), so this endpoint stays
+ * cheap.
  */
 import { Router, type Request, type Response } from "express";
 import { log } from "../log.js";
@@ -33,7 +36,7 @@ export function healthRouter(): Router {
       });
     }
 
-    res.status(dashboardUp ? 200 : 503).json({
+    res.status(200).json({
       status: dashboardUp ? "ok" : "degraded",
       service: "pygate-worker",
       dashboardUp,
