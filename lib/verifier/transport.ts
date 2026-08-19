@@ -239,7 +239,14 @@ export function relayFetchAdapter(
           retryable: true,
         });
       }
-      const url = `${base}/${encodeURIComponent(opts.providerSlug)}/${encodeURIComponent(referenceOrUrl)}`;
+      // Encode the upstream URL as base64url (not percent-encoded). The
+      // relay lives behind reverse proxies (Plesk Nginx, etc.) that block
+      // any decoded path containing `%2F`, so percent-encoded URLs like
+      // `https%3A%2F%2F...%2F...` get rejected at the edge. base64url only
+      // uses [A-Za-z0-9-_] + `=` padding and survives every common proxy
+      // path filter.
+      const encodedRef = Buffer.from(referenceOrUrl, "utf8").toString("base64url");
+      const url = `${base}/${encodeURIComponent(opts.providerSlug)}/${encodedRef}`;
       const startedAt = Date.now();
       try {
         const res = await fetch(url, {
