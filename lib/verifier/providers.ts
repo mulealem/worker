@@ -19,20 +19,6 @@ import {
 } from "./transport.js";
 import type { Provider } from "./types.js";
 
-/** Common CBE JSON API headers (per the upstream mobile-app receipts). */
-const CBE_HEADERS: Record<string, string> = {
-  Origin: "https://mbreciept.cbe.com.et",
-  Referer: "https://mbreciept.cbe.com.et/",
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-site",
-  "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"Windows"',
-  "x-app-id": "d1292e42-7400-49de-a2d3-9731caa4c819",
-  "x-app-version": "0a01980b-9859-1369-8198-59f403820000",
-};
-
 function relayBaseUrl(envVar: string): string | null {
   const v = process.env[envVar];
   if (!v) return null;
@@ -67,6 +53,34 @@ function mpesaRelays(): TransportAdapter[] {
         relayBaseUrl: base,
         key,
         providerSlug: "mpesa",
+      }),
+    );
+  }
+  return adapters;
+}
+
+/**
+ * CBE relay adapters. Unlike telebirr / m-pesa we deliberately skip the
+ * direct adapter for CBE: the worker host (foreign data center) is geo-
+ * blocked from `mbreciept.cbe.com.et` / `mb.cbe.com.et`, and routing it
+ * through an Ethiopia-hosted relay (e.g. the operator's Plesk proxy at
+ * payment.com.et) is the only reliable path.
+ *
+ * Reads CBE_RELAY_URL_1..4 + CBE_RELAY_KEY_1..4. If none are configured,
+ * the resulting pool is empty and any CBE verification will surface an
+ * exhausted-pool error — surfaced loudly so misconfiguration is obvious.
+ */
+function cbeRelays(): TransportAdapter[] {
+  const adapters: TransportAdapter[] = [];
+  for (let i = 1; i <= 4; i += 1) {
+    const base = relayBaseUrl(`CBE_RELAY_URL_${i}`);
+    const key = process.env[`CBE_RELAY_KEY_${i}`];
+    if (!base || !key) continue;
+    adapters.push(
+      relayFetchAdapter(`cbe-relay-${i}`, {
+        relayBaseUrl: base,
+        key,
+        providerSlug: "cbe",
       }),
     );
   }
@@ -111,9 +125,9 @@ export function getProviderPool(provider: Provider): TransportPool {
       ]);
       break;
     case "cbe":
-      pool = poolFor([
-        directFetchAdapter("cbe-direct", { extraHeaders: CBE_HEADERS }),
-      ]);
+      // CBE: relay-only. Direct fetch from the worker host is geo-blocked,
+      // so we go straight to the configured Ethiopia-hosted relay pool.
+      pool = poolFor([...cbeRelays()]);
       break;
     case "boa":
       pool = poolFor([directFetchAdapter("boa-direct")]);
