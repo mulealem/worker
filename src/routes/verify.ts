@@ -67,11 +67,14 @@ function makeHandler(mode: ModeContext) {
         return;
       }
       const project = await getProjectByApiKey(apiKey);
+      logv.info("verify request received", { mode: mode.mode, projectId: project.id });
 
       const contentType = req.header("content-type") ?? "";
       if (contentType.includes("application/json")) {
+        logv.debug("verify: dispatching JSON branch", { mode: mode.mode, projectId: project.id });
         return handleJson(req, res, project, mode);
       }
+      logv.debug("verify: dispatching multipart branch", { mode: mode.mode, projectId: project.id });
       return handleMultipart(req, res, project, mode);
     } catch (err) {
       logv.error(
@@ -90,9 +93,14 @@ async function handleJson(
 ): Promise<void> {
   const parsed = JsonBody.safeParse(req.body);
   if (!parsed.success) {
+    logv.warn("verify JSON: invalid body", { mode: mode.mode, projectId: project.id });
     res.status(400).json({ error: "Invalid JSON body", details: parsed.error.format() });
     return;
   }
+  logv.info(
+    "verify JSON: running runSmartVerify",
+    { mode: mode.mode, projectId: project.id, referencePrefix: parsed.data.reference.slice(0, 12) },
+  );
   const outcome: SmartVerifyOutcome = await runSmartVerify({
     reference: parsed.data.reference,
     suffix: parsed.data.suffix ?? "",
@@ -101,6 +109,10 @@ async function handleJson(
   if (!outcome.ok) {
     const status =
       outcome.status === 404 ? 404 : outcome.status === 401 ? 401 : 502;
+    logv.warn(
+      "verify JSON: runSmartVerify did not find a match",
+      { mode: mode.mode, projectId: project.id, provider: outcome.provider, upstreamStatus: outcome.status, error: outcome.error },
+    );
     res.status(status).json({
       ok: false,
       mode: mode.mode,
@@ -111,6 +123,10 @@ async function handleJson(
     });
     return;
   }
+  logv.info(
+    "verify JSON: success",
+    { mode: mode.mode, projectId: project.id, provider: outcome.provider, refId: outcome.data?.referenceId },
+  );
   res.json({
     ok: true,
     mode: mode.mode,
@@ -134,18 +150,31 @@ async function handleMultipart(
   };
   const parsed = MultipartBody.safeParse(body);
   if (!parsed.success) {
+    logv.warn("verify multipart: invalid body", { mode: mode.mode, projectId: project.id });
     res.status(400).json({ error: "Invalid body", details: parsed.error.format() });
     return;
   }
 
   const receiptPath = getReceiptPath(req, parsed.data);
   if (!receiptPath) {
+    logv.warn("verify multipart: missing receiptPath", { mode: mode.mode, projectId: project.id });
     res.status(400).json({
       error:
         "Provide either a file (multipart/form-data) or transactionNumber / smsText.",
     });
     return;
   }
+
+  logv.info(
+    "verify multipart: dispatching to verifyPayment",
+    {
+      mode: mode.mode,
+      projectId: project.id,
+      receiptType: parsed.data.receiptType ?? (req.file ? "IMAGE" : "TRANSACTION_NUMBER"),
+      hasFile: !!req.file,
+      hasPhoneNumber: !!parsed.data.phoneNumber,
+    },
+  );
 
   const verifiable: VerifiablePayment = {
     id: parsed.data.transactionNumber ?? parsed.data.smsText ?? receiptPath,
@@ -175,6 +204,18 @@ async function handleMultipart(
     autoApproveEligible = verdict.ok;
     autoApproveReason = verdict.reason ?? null;
   }
+
+  logv.info(
+    "verify multipart: returning sandbox verdict (no DB write)",
+    {
+      mode: mode.mode,
+      projectId: project.id,
+      status: result.status,
+      refId: result.status === "VERIFIED" ? result.data?.referenceId : undefined,
+      autoApproveEligible,
+      autoApproveReason,
+    },
+  );
 
   res.json({
     mode: mode.mode,

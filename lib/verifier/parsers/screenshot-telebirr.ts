@@ -5,6 +5,9 @@
 
 import { emptyReceipt, normalizeDate, parseAmount } from "./base.js";
 import type { ReceiptData } from "../types.js";
+import { log } from "../../log.js";
+
+const logv = log.child({ module: "parser.screenshot-telebirr" });
 
 function find(text: string, pattern: RegExp): string | null {
   const m = text.match(pattern);
@@ -36,5 +39,16 @@ export function parseTelebirrScreenshotFromText(
   data.amount          = parseAmount(amountStr);
   data.paymentDate     = normalizeDate(paymentDate);
   data.transactionType = transactionType;
+
+  logv.info(
+    "telebirr screenshot parser result",
+    {
+      sourceUrl,
+      refId: data.referenceId || "<empty>",
+      amount: data.amount ?? "<null>",
+      hasReceiver: !!data.receiverName,
+      hasDate: !!data.paymentDate,
+    },
+  );
   return data;
 }

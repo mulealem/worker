@@ -513,6 +513,10 @@ async function verifyFromTransactionNumber(
     return { data };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    logv.warn(
+      "verifyFromTransactionNumber: provider fetch/parse failed",
+      { provider, txnPrefix: trimmed.slice(0, 12), err: msg },
+    );
     return { data: null, reason: msg };
   }
 }

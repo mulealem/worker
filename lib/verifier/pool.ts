@@ -74,6 +74,7 @@ export class TransportPool {
    * argument to the relay.
    */
   async fetch(url: string): Promise<PoolOutcome> {
+    const poolStartedAt = Date.now();
     const deadline = Date.now() + this.cfg.totalTimeoutMs;
     const adapterErrors: Array<{ id: string; error: string }> = [];
 
@@ -100,6 +101,10 @@ export class TransportPool {
         attempt += 1;
         try {
           const result = await adapter.fetch(url, { timeoutMs: perAttemptTimeoutMs });
+          logv.info(
+            `[transport-pool] adapter=${adapter.id} url=${url} attempt=${attempt}/${this.cfg.maxAttempts} OK ` +
+              `status=${result.status} totalElapsedMs=${Date.now() - poolStartedAt}`,
+          );
           return { kind: "ok", adapterId: adapter.id, result, attempts: attempt };
         } catch (err) {
           if (!(err instanceof TransportError)) {
