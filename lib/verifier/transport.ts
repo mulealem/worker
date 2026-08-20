@@ -18,6 +18,8 @@
  *   - Adapters must report `.stats()` for the admin probe endpoint.
  */
 
+import { log } from "..\/log.js";
+
 export type TransportRole = "primary" | "regional";
 
 export interface AdapterStats {
@@ -206,6 +208,7 @@ export function relayFetchAdapter(
   },
 ): TransportAdapter {
   const base = opts.relayBaseUrl.replace(/\/+$/, "");
+  const logv = log.child({ module: "transport-relay" });
   let totalCalls = 0;
   let totalFailures = 0;
   let consecutiveFailures = 0;
@@ -247,6 +250,22 @@ export function relayFetchAdapter(
       // path filter.
       const encodedRef = Buffer.from(referenceOrUrl, "utf8").toString("base64url");
       const url = `${base}/${encodeURIComponent(opts.providerSlug)}/${encodedRef}`;
+      // Log the *exact* outbound URL the worker is about to send. The pool's
+      // `[transport-pool] url=…` line shows the upstream argument, not what
+      // the adapter fetched — this line is the source of truth for "did the
+      // worker actually call the relay?". Correlate `outbound=` with the
+      // Plesk relay's access log by the base64url suffix.
+      let upstreamHost = "?";
+      try {
+        upstreamHost = new URL(referenceOrUrl).host;
+      } catch {
+        // non-URL upstream arg — just leave upstreamHost as "?".
+      }
+      logv.info(
+        `[transport-relay] adapter=${id} outbound=${url} ` +
+          `provider=${opts.providerSlug} upstreamHost=${upstreamHost} ` +
+          `key=${opts.key ? "set" : "missing"}`,
+      );
       const startedAt = Date.now();
       try {
         const res = await fetch(url, {
