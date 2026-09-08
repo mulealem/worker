@@ -3,7 +3,8 @@
  *
  * Replaces the previous `setInterval(1000ms)` polling loop. The executor
  * now idles on `nextAvailable()` (resolved only when the dispatch queue
- * gets a push notification) and runs jobs as they arrive.
+ * gets a push notification) and runs jobs as they arrive, with at most
+ * WORKER_MAX_CONCURRENCY jobs in flight at once.
  *
  * Failure handling:
  *   - On error: schedule a local timer-based retry with exponential backoff
@@ -14,6 +15,8 @@
  * Crash recovery:
  *   - `server.ts` calls `reconcileOnBoot()` once after the listener is up.
  *     This is a SINGLE GET, not a recurring loop.
+ *   - Jobs orphaned in PROCESSING by a mid-run crash are recovered by the
+ *     dashboard's `/api/cron/verifier-sweep` (external cron), not here.
  *
  * Heartbeats:
  *   - Optional. Disabled by default; enable with `WORKER_HEARTBEAT_MS=10000`.
@@ -43,6 +46,16 @@ const logv = log.child({ module: "tick" });
 let executorRunning = false;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let started = false;
+
+/**
+ * Max jobs executed simultaneously. OCR is CPU-heavy (tesseract + sharp
+ * each spawn threads), so without a cap a burst of dispatch pushes would
+ * run unbounded concurrent verifications and thrash/OOM the container.
+ */
+const MAX_CONCURRENT_JOBS = Math.max(
+  1,
+  Number(process.env.WORKER_MAX_CONCURRENCY ?? 3),
+);
 
 function isDisabled(): boolean {
   return process.env.WORKER_DISABLED === "1";
@@ -104,12 +117,31 @@ async function processOne(job: DispatchJob): Promise<void> {
 }
 
 async function executorLoop(): Promise<void> {
+  const running = new Set<Promise<void>>();
   while (!isDisabled()) {
+    // At capacity: wait for one in-flight job to settle before admitting
+    // another (the queue keeps holding any pushes that arrived meanwhile).
+    if (running.size >= MAX_CONCURRENT_JOBS) {
+      await Promise.race([...running]);
+      continue;
+    }
     // Idle until the dispatch queue gets a push notification.
     await nextAvailable();
     const job = takeNext();
     if (!job) continue;
-    void processOne(job);
+    const task = processOne(job).catch((err: unknown) => {
+      // processOne handles its own errors; this is a last-resort guard so
+      // one bad job can never kill the executor loop.
+      logv.error(
+        `unhandled job error jobId=${job.jobId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+    running.add(task);
+    void task.finally(() => {
+      running.delete(task);
+    });
   }
 }
 

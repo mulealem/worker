@@ -75,14 +75,15 @@ const server = app.listen(PORT, () => {
  * Not a periodic loop — invoked exactly once per process start.
  */
 async function reconcileOnBoot(): Promise<void> {
-  const port = Number(process.env.PORT ?? 3001);
   const token = process.env.WORKER_API_TOKEN ?? "";
   if (!token) {
     logv.warn(`reconcile skipped: WORKER_API_TOKEN not set`);
     return;
   }
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/internal/dispatch/pending`, {
+    // Same PORT the listener above bound to (previously defaulted to 3001,
+    // which is the marketing app's port — a latent bug when PORT is unset).
+    const res = await fetch(`http://127.0.0.1:${PORT}/internal/dispatch/pending`, {
       method: "GET",
       headers: { authorization: `Bearer ${token}` },
       // Bound it — if it stalls, we don't block forever.
