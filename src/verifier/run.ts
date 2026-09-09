@@ -177,6 +177,22 @@ export async function runVerifierJob(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logv.warn(`auto-approve failed payment=${paymentId} reason=${msg}`);
+      // Surface the failure instead of leaving a silent VERIFIED verdict —
+      // otherwise the admin UI shows a misleading "left for manual review"
+      // with no indication that the approval call itself broke.
+      finalResult = {
+        status: "UNVERIFIED",
+        data: result.data,
+        reason: `Auto-approval could not run: ${msg}`,
+      };
+      try {
+        await postVerifierResult(jobId, {
+          status: "UNVERIFIED",
+          lastError: finalResult.reason,
+        });
+      } catch {
+        /* job-row update is best-effort; the audit below still records it */
+      }
       try {
         await postAudit({
           action: "auto_approve_failed",
