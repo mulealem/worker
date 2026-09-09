@@ -223,6 +223,11 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
   const bytes = await readReceiptBytes(payment);
   logv.info(`verifyFromImage loaded ${bytes.length} bytes`);
 
+  // What we actually found vs. what failed, so the final SKIPPED reason can
+  // tell the truth ("QR found but the bank lookup failed") instead of
+  // claiming nothing was on the image.
+  const found: string[] = [];
+
   // Primary path — QR code. CBE mobile-app receipts always include a QR
   // that encodes the live receipt URL. Scanning it directly is cheap and
   // deterministic. Other banks (Telebirr) skip straight to the OCR fallback.
@@ -238,6 +243,8 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
     const msg = err instanceof Error ? err.message : String(err);
     logv.warn(`QR extraction failed: ${msg}`);
   }
+  let lastQrLookupError: string | null = null;
+  let lastQrUnsupportedError: string | null = null;
   for (const payload of qrPayloads) {
     logv.info(`QR payload: ${payload}`);
     try {
@@ -252,7 +259,26 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
       return { data };
     } catch (urlErr) {
       const msg = urlErr instanceof Error ? urlErr.message : String(urlErr);
-      logv.warn(`QR payload not a supported bank URL: ${msg}`);
+      if (
+        urlErr instanceof Error &&
+        urlErr.message.includes("is not supported")
+      ) {
+        lastQrUnsupportedError = msg;
+        logv.warn(`QR payload is not a supported bank URL: ${msg}`);
+      } else {
+        lastQrLookupError = msg;
+        logv.warn(`QR receipt lookup failed: ${msg}`);
+      }
+    }
+  }
+  if (qrPayloads.length > 0) {
+    found.push("a QR code");
+    if (lastQrLookupError) {
+      found.push(`but its receipt lookup failed: ${lastQrLookupError}`);
+    } else if (lastQrUnsupportedError) {
+      found.push(
+        `but it does not point at a supported bank receipt page (${lastQrUnsupportedError})`,
+      );
     }
   }
 
@@ -334,8 +360,9 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
       `[verifier] OCR reference fallback provider=${fallbackProvider} ` +
         `candidates=${candidates.length} [${candidates.slice(0, 3).join(", ")}]`,
     );
+    let lastTxnError: string | null = null;
     for (const ref of candidates.slice(0, 3)) {
-      const { data } = await verifyFromTransactionNumber(
+      const { data, reason } = await verifyFromTransactionNumber(
         ref,
         payment.bankAccount,
         payment.phoneNumber ?? null,
@@ -345,7 +372,23 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
         data.extractionMethod = "ocr-txn";
         return { data };
       }
+      if (reason) lastTxnError = reason;
     }
+    if (candidates.length > 0) {
+      found.push(
+        `reference number(s) ${candidates.slice(0, 3).join(", ")}`,
+      );
+      if (lastTxnError) {
+        found.push(`but their lookup failed: ${lastTxnError}`);
+      }
+    }
+  }
+
+  if (found.length > 0) {
+    return {
+      data: null,
+      reason: `The receipt could not be verified automatically: ${found.join(", ")}.`,
+    };
   }
 
   return {

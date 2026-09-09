@@ -166,9 +166,10 @@ export function postVerifierResult(
   jobId: string,
   body: {
     status: "VERIFIED" | "UNVERIFIED" | "SKIPPED" | "ERROR";
-    extractedData: Record<string, unknown> | null;
-    receiptReference: string | null;
-    lastError: string | null;
+    /** Omit to leave the Payment row untouched (job-row-only updates). */
+    extractedData?: Record<string, unknown> | null;
+    receiptReference?: string | null;
+    lastError?: string | null;
   },
 ): Promise<{ ok: true }> {
   return callDashboard<{ ok: true }>(
