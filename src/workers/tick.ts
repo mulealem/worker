@@ -57,21 +57,59 @@ const MAX_CONCURRENT_JOBS = Math.max(
   Number(process.env.WORKER_MAX_CONCURRENCY ?? 3),
 );
 
+/**
+ * Hard wall-clock budget for ONE job, including local retries. Past it we
+ * stop retrying and post a terminal `fail` to the dashboard, so a hung
+ * bank fetch / OCR stall can never leave a payment "verifying" forever.
+ */
+const VERIFIER_JOB_DEADLINE_MS = Math.max(
+  30_000,
+  Number(process.env.VERIFIER_JOB_DEADLINE_MS ?? 180_000),
+);
+
+/** Rejects if `p` hasn't settled within `ms`. The underlying work keeps
+ * running (fetch/OCR can't be cancelled) but the job terminal-states now. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`verification exceeded its ${Math.round(ms / 1000)}s time budget`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 function isDisabled(): boolean {
   return process.env.WORKER_DISABLED === "1";
 }
 
 async function processOne(job: DispatchJob): Promise<void> {
   const startedAt = Date.now();
+  // firstStartedAtMs survives local retries so the deadline is per JOB,
+  // not per attempt.
+  const firstStartedAtMs = job.firstStartedAtMs ?? startedAt;
   logv.info(
     `running verifier jobId=${job.jobId} paymentId=${job.paymentId} ` +
-      `attempt=${job.attempts + 1}/${job.maxAttempts}`,
+      `attempt=${job.attempts + 1}/${job.maxAttempts}`
   );
   try {
-    await runVerifierJob({
-      jobId: job.jobId,
-      paymentId: job.paymentId,
-    });
+    const remainingMs = Math.max(5_000, VERIFIER_JOB_DEADLINE_MS - (Date.now() - firstStartedAtMs));
+    await withTimeout(
+      runVerifierJob({
+        jobId: job.jobId,
+        paymentId: job.paymentId,
+      }),
+      remainingMs,
+    );
     logv.info(
       `done verifier jobId=${job.jobId} durationMs=${Date.now() - startedAt}`,
     );
@@ -79,7 +117,11 @@ async function processOne(job: DispatchJob): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const nextAttempts = job.attempts + 1;
-    const failed = nextAttempts >= job.maxAttempts;
+    const deadlineHit = Date.now() - firstStartedAtMs >= VERIFIER_JOB_DEADLINE_MS;
+    const lastError = deadlineHit
+      ? `Verification budget exhausted (>${Math.round(VERIFIER_JOB_DEADLINE_MS / 1000)}s): ${msg}`
+      : msg;
+    const failed = nextAttempts >= job.maxAttempts || deadlineHit;
     logv.warn(
       `verifier error jobId=${job.jobId} paymentId=${job.paymentId} ` +
         `attempt=${nextAttempts}/${job.maxAttempts} reason=${msg}` +
@@ -87,7 +129,7 @@ async function processOne(job: DispatchJob): Promise<void> {
     );
     try {
       if (failed) {
-        await postVerifierFail(job.jobId, { lastError: msg });
+        await postVerifierFail(job.jobId, { lastError });
         markDone(job.jobId);
       } else {
         await postVerifierRetry(job.jobId, { lastError: msg });
@@ -97,6 +139,7 @@ async function processOne(job: DispatchJob): Promise<void> {
           {
             ...job,
             attempts: nextAttempts,
+            firstStartedAtMs,
           },
           backoffMs(nextAttempts),
         );
@@ -107,9 +150,15 @@ async function processOne(job: DispatchJob): Promise<void> {
           postErr instanceof Error ? postErr.message : String(postErr)
         }`,
       );
+      if (deadlineHit) {
+        // Nothing left to do within the budget — surface and drop the job
+        // rather than rescheduling forever.
+        markDone(job.jobId);
+        return;
+      }
       // Treat as transient; let the local retry timer handle it.
       scheduleRetry(
-        { ...job, attempts: nextAttempts },
+        { ...job, attempts: nextAttempts, firstStartedAtMs },
         backoffMs(nextAttempts),
       );
     }

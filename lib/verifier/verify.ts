@@ -10,7 +10,9 @@
  *     3. If no QR: OCR the bytes (tesseract.js)
  *     4. If OCR text contains a known-bank URL → URL flow
  *     5. Else if provider is Telebirr → screenshot parser
- *     6. Else → SKIPPED
+ *     6. Else: pull labeled reference numbers out of the OCR text and run
+ *        them through the transaction-number flow (all providers)
+ *     7. Else → SKIPPED
  *
  *   SMS_TEXT
  *     1. `receiptPath` is the raw text
@@ -310,14 +312,66 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
       `[verifier] Telebirr screenshot parser refId=${data.referenceId || "<empty>"} ` +
         `amount=${data.amount ?? "<null>"}`,
     );
-    return { data };
+    if (data.referenceId) {
+      return { data };
+    }
+    // No reference parsed — fall through to the reference-candidate flow
+    // below, which can still look the receipt up by number.
   }
+
+  // Last resort: pull reference-number candidates out of the OCR text and
+  // run them through the transaction-number flow. Every provider has a
+  // txn/receipt lookup, so this rescues screenshots that show a reference
+  // but have no scannable QR or bank URL. Misreads are safe: the fetched
+  // receipt still has to pass the auto-approval gate (provider / amount /
+  // receiver account) before anything is approved.
+  const fallbackProvider =
+    (payment.bankAccount ? providerForBankType(payment.bankAccount.type) : null) ??
+    detectProviderFromText(ocrTextStr);
+  if (fallbackProvider) {
+    const candidates = extractReferenceCandidates(ocrTextStr);
+    logv.info(
+      `[verifier] OCR reference fallback provider=${fallbackProvider} ` +
+        `candidates=${candidates.length} [${candidates.slice(0, 3).join(", ")}]`,
+    );
+    for (const ref of candidates.slice(0, 3)) {
+      const { data } = await verifyFromTransactionNumber(
+        ref,
+        payment.bankAccount,
+        payment.phoneNumber ?? null,
+        fallbackProvider,
+      );
+      if (data && data.referenceId) {
+        data.extractionMethod = "ocr-txn";
+        return { data };
+      }
+    }
+  }
+
   return {
     data: null,
     reason:
-      "Could not detect a bank URL in the screenshot, and no screenshot parser " +
-      "is available for this bank. Use an SMS text or paste the receipt URL instead.",
+      "Could not verify this screenshot automatically: no QR code, bank URL, or readable reference number was found. " +
+      "Submit the SMS text or the transaction/receipt number instead.",
   };
+}
+
+/**
+ * Pull plausible transaction-reference numbers out of OCR text. Conservative
+ * on purpose: only values that follow an explicit label ("Ref:", "Transaction
+ * ID: ..."). Anything misread here is caught downstream by the auto-approval
+ * gate, but we still don't want to spray random tokens at bank APIs.
+ */
+const REFERENCE_LABEL_RE =
+  /\b(?:ref|reference|ref\.?\s*no\.?|reference number|txn|trx|transaction|transaction id|trans id|receipt no\.?|receipt number)\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{4,24})/g;
+
+export function extractReferenceCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(REFERENCE_LABEL_RE)) {
+    const ref = m[1].replace(/[.,;:]+$/, "").toUpperCase();
+    if (ref && !out.includes(ref)) out.push(ref);
+  }
+  return out;
 }
 
 /**
@@ -421,18 +475,22 @@ export async function verifyPayment(payment: VerifiablePayment): Promise<VerifyR
  * Transaction-number flow. Routes to the per-provider lookups using the
  * project's bank account. CBE / Dashen / Awash / BoA / Zemen receipts are
  * fetched from the URL form ({ref}{suffix}); CBE Birr and M-Pesa hit their
- * respective APIs.
+ * respective APIs. `providerOverride` lets the OCR fallback route by a
+ * provider sniffed from the receipt when no bank account is selected.
  */
 async function verifyFromTransactionNumber(
   txn: string,
   bankAccount: VerifiablePayment["bankAccount"],
   phoneNumber: string | null,
+  providerOverride?: Provider,
 ): Promise<{ data: ReceiptData | null; reason?: string }> {
   const trimmed = txn.trim();
   if (!trimmed) {
     return { data: null, reason: "Transaction number is empty." };
   }
-  const provider = bankAccount ? providerForBankType(bankAccount.type) : null;
+  const provider =
+    providerOverride ??
+    (bankAccount ? providerForBankType(bankAccount.type) : null);
   logv.info(
     `verifyFromTransactionNumber bankType=${bankAccount?.type ?? "<none>"} ` +
       `provider=${provider ?? "<none>"} txn=${trimmed.slice(0, 20)}…`,

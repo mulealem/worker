@@ -18,6 +18,9 @@ export interface DispatchJob {
   attempts: number;
   maxAttempts: number;
   idempotencyKey?: string;
+  /** Epoch ms of the job's FIRST execution attempt — the retry deadline
+   * is measured from here, not from each attempt. Set by tick.ts. */
+  firstStartedAtMs?: number;
 }
 
 interface QueueState {

@@ -22,6 +22,8 @@ import {
   shouldAutoApprove,
   type VerifiablePayment,
 } from "../../lib/verifier/verify.js";
+import type { BankType } from "../../lib/verifier/bank-type.js";
+import { toMinor } from "../../lib/money.js";
 import {
   runSmartVerify,
   type SmartVerifyOutcome,
@@ -46,6 +48,14 @@ const MultipartBody = z.object({
   currency: z.string().optional(),
   bankAccountId: z.string().optional(),
   phoneNumber: z.string().optional(),
+  // Bank context sent by the sandbox form (SandboxForm.tsx). The sandbox
+  // writes nothing to the DB, so client-supplied values are fine here —
+  // they only steer provider routing and the informational eligibility
+  // verdict.
+  bankType: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankAccountName: z.string().optional(),
+  expectedAmount: z.coerce.number().optional(),
 });
 
 const JsonBody = z.object({
@@ -176,6 +186,19 @@ async function handleMultipart(
     },
   );
 
+  // Sandbox bank context: lets the verifier route to the right provider
+  // (transaction-number / CBE-Birr phone lookups / OCR reference fallback)
+  // and evaluate eligibility against the real account + expected amount.
+  const sandboxBankAccount =
+    parsed.data.bankType && parsed.data.bankAccountNumber
+      ? {
+          type: parsed.data.bankType as BankType,
+          accountNumber: parsed.data.bankAccountNumber,
+          accountName: parsed.data.bankAccountName ?? null,
+          phoneNumber: parsed.data.phoneNumber ?? null,
+        }
+      : null;
+
   const verifiable: VerifiablePayment = {
     id: parsed.data.transactionNumber ?? parsed.data.smsText ?? receiptPath,
     receiptPath,
@@ -188,9 +211,13 @@ async function handleMultipart(
       description: "",
       metadata: null,
     },
-    bankAccount: null,
+    bankAccount: sandboxBankAccount,
     phoneNumber: parsed.data.phoneNumber ?? null,
   };
+  if (parsed.data.expectedAmount != null && Number.isFinite(parsed.data.expectedAmount)) {
+    verifiable.order.amount = parsed.data.expectedAmount;
+    verifiable.order.amountMinor = toMinor(parsed.data.expectedAmount) ?? 0;
+  }
   if (req.file) {
     verifiable.readReceiptBytes = async () => req.file!.buffer;
   }
@@ -200,7 +227,11 @@ async function handleMultipart(
   let autoApproveEligible = false;
   let autoApproveReason: string | null = null;
   if (result.status === "VERIFIED" && result.data) {
-    const verdict = shouldAutoApprove(verifiable.order.amountMinor, result.data, null);
+    const verdict = shouldAutoApprove(
+      verifiable.order.amountMinor,
+      result.data,
+      sandboxBankAccount,
+    );
     autoApproveEligible = verdict.ok;
     autoApproveReason = verdict.reason ?? null;
   }
