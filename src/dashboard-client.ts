@@ -46,6 +46,22 @@ interface CallOptions {
   expectStatus?: number;
   /** When true, the response body is treated as binary bytes (not JSON). */
   rawBytes?: boolean;
+  /**
+   * Extra attempts when the fetch itself fails at the network level
+   * (reset / refused / timeout). Only safe for idempotent reads — callers
+   * of mutating POSTs should leave this at the default (0).
+   */
+  retries?: number;
+}
+
+/** Flatten a fetch failure into a human-readable cause string. */
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts = [err.message];
+  const cause = (err as NodeJS.ErrnoException).cause;
+  if (cause instanceof Error) parts.push(cause.message);
+  else if (cause) parts.push(String(cause));
+  return parts.filter(Boolean).join(" — ");
 }
 
 export async function callDashboard<T = unknown>(
@@ -57,28 +73,47 @@ export async function callDashboard<T = unknown>(
     authorization: `Bearer ${token}`,
     accept: opts.rawBytes ? "application/octet-stream" : "application/json",
   };
-  const init: RequestInit = { method, headers, cache: "no-store" } as RequestInit;
   if (opts.body !== undefined) {
     headers["content-type"] = "application/json";
-    init.body = JSON.stringify(opts.body);
+  }
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const maxAttempts = 1 + (opts.retries ?? 0);
+
+  let res: Response | undefined;
+  let lastCause = "unknown";
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // Fresh controller per attempt — an aborted signal cannot be reused.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+    try {
+      res = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        cache: "no-store",
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      } as RequestInit);
+      break;
+    } catch (err) {
+      lastCause = describeFetchError(err);
+      logv.warn(
+        `dashboard unreachable path=${path} attempt=${attempt}/${maxAttempts} ` +
+          `durationMs=${Date.now() - startedAt} cause=${lastCause}`,
+      );
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  const controller = new AbortController();
-  const timeoutMs = opts.timeoutMs ?? 30_000;
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  init.signal = controller.signal;
-
-  let res: Response;
-  try {
-    res = await fetch(`${baseUrl}${path}`, init);
-  } catch (err) {
-    throw new DashboardError(
-      0,
-      err instanceof Error ? err.message : String(err),
-      "Dashboard unreachable",
-    );
-  } finally {
-    clearTimeout(timer);
+  if (!res) {
+    // Network-level failure on every attempt. Keep the cause IN the message —
+    // a bare "Dashboard unreachable" hides whether this is DNS, a refused
+    // connection, or a timeout, which is exactly what you need to diagnose it.
+    throw new DashboardError(0, lastCause, `Dashboard unreachable (${lastCause})`);
   }
 
   const expected = opts.expectStatus ?? 200;
@@ -133,14 +168,14 @@ export interface PaymentContext {
 export function getPaymentContext(paymentId: string): Promise<PaymentContext> {
   return callDashboard<PaymentContext>(
     `/api/internal/worker/payments/${encodeURIComponent(paymentId)}/context`,
-    { method: "GET" },
+    { method: "GET", retries: 2 },
   );
 }
 
 export async function getReceiptBytes(filename: string): Promise<Buffer> {
   const u8 = await callDashboard<Uint8Array>(
     `/api/internal/worker/receipts/${encodeURIComponent(filename)}`,
-    { method: "GET", rawBytes: true, timeoutMs: 60_000 },
+    { method: "GET", rawBytes: true, timeoutMs: 60_000, retries: 2 },
   );
   return Buffer.from(u8);
 }
@@ -301,7 +336,7 @@ export interface ProjectByApiKey {
 export function getProjectByApiKey(apiKey: string): Promise<ProjectByApiKey> {
   return callDashboard<ProjectByApiKey>(
     `/api/internal/worker/projects/by-api-key/${encodeURIComponent(apiKey)}`,
-    { method: "GET" },
+    { method: "GET", retries: 2 },
   );
 }
 
