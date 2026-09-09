@@ -632,14 +632,6 @@ export const PAYMENT_MAX_AGE_DAYS = 7;
 /** Tolerance for amount match, in minor units (default 100 = 1.00 ETB). */
 export const AMOUNT_TOLERANCE_MINOR = 100;
 
-/** Strip non-digits and keep the last `n` characters. */
-function lastDigits(value: string | null | undefined, n: number): string | null {
-  if (!value) return null;
-  const digits = value.replace(/\D/g, "");
-  if (digits.length < 4) return null;
-  return digits.slice(-n);
-}
-
 /**
  * Return the paymentDate as a millisecond timestamp, or `null` if it can't
  * be parsed. Accepts the literal text outputs each bank uses.
@@ -660,13 +652,51 @@ function paymentDateMs(value: string | null | undefined): number | null {
 }
 
 /**
+ * Extract the comparable digits of an account number. Bank receipts often
+ * mask accounts ("1*******0189") — only the tail after the last mask
+ * character is visible, so compare that tail against the same-length tail
+ * of the configured account. Comparing a masked value as if it were whole
+ * produces spurious mismatches. Returns null when there aren't enough
+ * visible digits to compare.
+ */
+function accountCompareDigits(
+  value: string | null | undefined,
+): { digits: string; masked: boolean } | null {
+  if (!value) return null;
+  const masked = value.includes("*");
+  const source = masked ? value.slice(value.lastIndexOf("*") + 1) : value;
+  const digits = source.replace(/\D/g, "");
+  if (digits.length < 4) return null;
+  return { digits, masked };
+}
+
+/** Accounts match when the receipt's visible tail equals the configured account's tail. */
+function receiverAccountMatches(
+  accountNumber: string,
+  receiverAccount: string | null | undefined,
+): { status: "pass" | "fail" | "skip"; expectedTail?: string; receiptTail?: string } {
+  const expected = accountCompareDigits(accountNumber);
+  const receipt = accountCompareDigits(receiverAccount ?? null);
+  if (!expected || !receipt) return { status: "skip" };
+  const compareLen = receipt.masked
+    ? receipt.digits.length
+    : Math.min(8, receipt.digits.length, expected.digits.length);
+  const expectedTail = expected.digits.slice(-compareLen);
+  const receiptTail = receipt.digits.slice(-compareLen);
+  return expectedTail === receiptTail
+    ? { status: "pass", receiptTail }
+    : { status: "fail", expectedTail, receiptTail };
+}
+
+/**
  * Auto-approval gate. All of these must hold:
  *   - the verifier produced a non-empty `referenceId`
  *   - the extracted amount matches the order (within tolerance)
  *   - the receipt's date is no older than PAYMENT_MAX_AGE_DAYS days
  *   - if a project bank-account is selected, the receipt provider matches
- *     the bank-account's `BankType` and the receiver account's last-8 digits
- *     match the project's account number's last-8 digits
+ *     the bank-account's `BankType` and the receiver account matches the
+ *     project's account number (masked receipt accounts are compared on
+ *     their visible tail only)
  *
  * `orderAmountMinor` is the authoritative value — we never compare floats.
  */
@@ -710,12 +740,14 @@ export function shouldAutoApprove(
         reason: `Provider mismatch (selected=${bankAccount.type}, receipt=${data.provider}).`,
       };
     }
-    const expectedAcct = lastDigits(bankAccount.accountNumber, 8);
-    const receiptAcct = lastDigits(data.receiverAccount, 8);
-    if (expectedAcct && receiptAcct && expectedAcct !== receiptAcct) {
+    const acctVerdict = receiverAccountMatches(
+      bankAccount.accountNumber,
+      data.receiverAccount,
+    );
+    if (acctVerdict.status === "fail") {
       return {
         ok: false,
-        reason: `Receiver account mismatch (…${expectedAcct.slice(-4)} vs …${receiptAcct.slice(-4)}).`,
+        reason: `Receiver account mismatch (account ends …${acctVerdict.expectedTail}, receipt shows …${acctVerdict.receiptTail}).`,
       };
     }
   }
