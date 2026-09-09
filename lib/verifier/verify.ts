@@ -361,7 +361,10 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
         `candidates=${candidates.length} [${candidates.slice(0, 3).join(", ")}]`,
     );
     let lastTxnError: string | null = null;
-    for (const ref of candidates.slice(0, 3)) {
+    // Cap at 2 candidates: each runs a full transport-pool call (up to ~45s
+    // against a slow relay), and this fallback runs after the QR path — three
+    // candidates could push a single verification past its time budget.
+    for (const ref of candidates.slice(0, 2)) {
       const { data, reason } = await verifyFromTransactionNumber(
         ref,
         payment.bankAccount,

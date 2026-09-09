@@ -150,6 +150,12 @@ export class TransportPool {
           if (s.consecutiveFailures >= this.cfg.failureThreshold) {
             tripAdapterCircuit(adapter, this.cfg.cooldownMs);
             adapterErrors.push({ id: adapter.id, error: "circuit opened" });
+            logv.warn(
+              `[transport-pool] circuit OPENED adapter=${adapter.id} after ` +
+                `${s.consecutiveFailures} consecutive failures ` +
+                `(threshold=${this.cfg.failureThreshold}, cooldown=${this.cfg.cooldownMs}ms) — ` +
+                `subsequent calls skip this adapter until the cooldown ends`,
+            );
             break;
           }
           // Retryable — wait before the next attempt.

@@ -91,8 +91,16 @@ function poolFor(adapters: TransportAdapter[]): TransportPool {
   const cfg = {
     maxAttempts: numEnv("RETRY_MAX_ATTEMPTS", 4),
     retryDelayMs: numEnv("RETRY_DELAY_MS", 1800),
-    totalTimeoutMs: numEnv("RELAY_TIMEOUT_MS", 20_000),
-    failureThreshold: numEnv("CIRCUIT_BREAKER_THRESHOLD", 2),
+    // Relayed CBE calls can legitimately take 5-10s (relay hop + CBE itself);
+    // a 20s total budget used to force 5s per-attempt aborts that looked like
+    // dead relays. 45s gives each of the 4 attempts ~11s.
+    totalTimeoutMs: numEnv("RELAY_TIMEOUT_MS", 45_000),
+    // Must be >= maxAttempts: the breaker counts CONSECUTIVE failures across
+    // calls (adapter state persists), and at 2 it cut short a single
+    // verification's retry budget after earlier failed runs had already
+    // accumulated a failure. At 4, one verification always gets its full
+    // retry budget; only repeated all-failure runs open the circuit.
+    failureThreshold: numEnv("CIRCUIT_BREAKER_THRESHOLD", 4),
     cooldownMs: numEnv("CIRCUIT_BREAKER_COOLDOWN_MS", 60_000),
   };
   return new TransportPool(adapters, cfg);

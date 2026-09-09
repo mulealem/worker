@@ -146,6 +146,10 @@ export async function fetchCbeApi(receiptUrl: string): Promise<{ json: unknown; 
   if (token.startsWith("v1-")) candidates.push(token.slice(3));
 
   let lastErr: Error | null = null;
+  // Human-readable summary of WHY the last candidate failed — includes the
+  // transport pool's per-adapter errors (timeouts, circuit opened, ...) so
+  // logs and surfaced reasons say what actually happened.
+  let lastDetail = "no candidates attempted";
   for (const candidate of candidates) {
     const apiUrl =
       `https://mb.cbe.com.et/api/v1/transactions/public/transaction-detail/${encodeURIComponent(candidate)}`;
@@ -166,6 +170,7 @@ export async function fetchCbeApi(receiptUrl: string): Promise<{ json: unknown; 
         return { json, raw };
       } catch (err) {
         lastErr = err instanceof Error ? err : new Error(String(err));
+        lastDetail = `non-JSON response: ${lastErr.message}`;
         logv.warn(
           `[verifier] fetchCbeApi non-JSON apiUrl=${apiUrl} ` +
             `elapsedMs=${Date.now() - startedAt} message=${lastErr.message}`,
@@ -186,14 +191,26 @@ export async function fetchCbeApi(receiptUrl: string): Promise<{ json: unknown; 
         `HTTP ${outcome.status} from CBE API.`,
         { status: outcome.status, retryable: false },
       );
+      lastDetail = outcome.error;
       continue;
     }
-    lastErr = new TransportError("NETWORK", `fetchCbeApi exhausted: ${outcome.error}`, {
+    const adapterDetail = outcome.adapterErrors.length
+      ? `${outcome.error} [${outcome.adapterErrors
+          .map((e) => `${e.id}: ${e.error}`)
+          .join("; ")}]`
+      : outcome.error;
+    lastErr = new TransportError("NETWORK", `fetchCbeApi exhausted: ${adapterDetail}`, {
       retryable: false,
     });
+    lastDetail = adapterDetail;
   }
 
-  throw lastErr ?? new Error("CBE API call failed for all token variations.");
+  const code = lastErr instanceof TransportError ? lastErr.code : "NETWORK";
+  throw new TransportError(
+    code === "STATUS_4XX" ? "STATUS_4XX" : "NETWORK",
+    `fetchCbeApi exhausted: ${lastDetail}`,
+    { retryable: false },
+  );
 }
 
 interface MpesaApiResponse {
