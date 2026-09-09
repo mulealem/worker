@@ -24,8 +24,11 @@ const Body = z.object({
 });
 
 export const verifierRouter: Router = Router();
+// Paths are relative to the mount point in server.ts (`/internal`). Express
+// strips the mount prefix before delegating to this router — defining them
+// as "/internal/..." would only ever match "/internal/internal/...".
 
-verifierRouter.post("/internal/verifier/run", async (req, res) => {
+verifierRouter.post("/verifier/run", async (req, res) => {
   const parsed = Body.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
@@ -46,7 +49,7 @@ verifierRouter.post("/internal/verifier/run", async (req, res) => {
   res.status(202).json({ ok: true, queued: true });
 });
 
-verifierRouter.post("/internal/verifier/run-sync", async (req, res) => {
+verifierRouter.post("/verifier/run-sync", async (req, res) => {
   const parsed = Body.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });

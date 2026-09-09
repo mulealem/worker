@@ -37,8 +37,17 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.raw({ type: "application/octet-stream", limit: "12mb" }));
 
-app.use((req, _res, next) => {
+app.use((req, res, next) => {
+  const startedAt = Date.now();
   logv.debug(`${req.method} ${req.path}`);
+  // Completion log — without this, a swallowed request (hung middleware,
+  // missing next()) is indistinguishable from slow work: the arrival line
+  // prints and then nothing, ever.
+  res.on("finish", () => {
+    logv.info(
+      `${req.method} ${req.path} -> ${res.statusCode} in ${Date.now() - startedAt}ms`,
+    );
+  });
   next();
 });
 
@@ -48,7 +57,11 @@ app.use(healthRouter());
 // Authenticated routes. Each router is wrapped with the bearer middleware
 // so the request is gated before the handler runs.
 app.use("/internal", requireWorkerApi, verifierRouter, webhookRouter);
-app.use("/internal", requireWorkerApi, dispatchRouter);
+// NOTE: dispatchRouter is a factory (like healthRouter above) — it must be
+// INVOKED. Passed bare, Express calls the factory as if it were middleware;
+// it builds a Router, returns it, and never calls next() or responds, so
+// every authenticated /internal request hangs until the caller times out.
+app.use("/internal", requireWorkerApi, dispatchRouter());
 app.use("/api/v1", requireWorkerApi, verifyRouter);
 app.use("/api/sandbox", requireWorkerApi, verifyRouter);
 

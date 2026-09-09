@@ -25,7 +25,8 @@ const Body = z.object({ deliveryId: z.string().min(1) });
 
 export const webhookRouter: Router = Router();
 
-webhookRouter.post("/internal/webhook/deliver", async (req, res) => {
+// Relative to the /internal mount in server.ts (Express strips the prefix).
+webhookRouter.post("/webhook/deliver", async (req, res) => {
   const parsed = Body.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid body" });
