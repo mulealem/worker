@@ -11,7 +11,7 @@
  * (Telebirr, M-Pesa).
  */
 
-import { TransportPool } from "./pool.js";
+import { TransportPool, type PoolConfig } from "./pool.js";
 import {
   directFetchAdapter,
   relayFetchAdapter,
@@ -87,13 +87,16 @@ function cbeRelays(): TransportAdapter[] {
   return adapters;
 }
 
-function poolFor(adapters: TransportAdapter[]): TransportPool {
-  const cfg = {
+function poolFor(
+  adapters: TransportAdapter[],
+  overrides: Partial<PoolConfig> = {},
+): TransportPool {
+  const cfg: PoolConfig = {
     maxAttempts: numEnv("RETRY_MAX_ATTEMPTS", 4),
     retryDelayMs: numEnv("RETRY_DELAY_MS", 1800),
     // Relayed CBE calls can legitimately take 5-10s (relay hop + CBE itself);
     // a 20s total budget used to force 5s per-attempt aborts that looked like
-    // dead relays. 45s gives each of the 4 attempts ~11s.
+    // dead relays.
     totalTimeoutMs: numEnv("RELAY_TIMEOUT_MS", 45_000),
     // Must be >= maxAttempts: the breaker counts CONSECUTIVE failures across
     // calls (adapter state persists), and at 2 it cut short a single
@@ -102,6 +105,7 @@ function poolFor(adapters: TransportAdapter[]): TransportPool {
     // retry budget; only repeated all-failure runs open the circuit.
     failureThreshold: numEnv("CIRCUIT_BREAKER_THRESHOLD", 4),
     cooldownMs: numEnv("CIRCUIT_BREAKER_COOLDOWN_MS", 60_000),
+    ...overrides,
   };
   return new TransportPool(adapters, cfg);
 }
@@ -135,7 +139,15 @@ export function getProviderPool(provider: Provider): TransportPool {
     case "cbe":
       // CBE: relay-only. Direct fetch from the worker host is geo-blocked,
       // so we go straight to the configured Ethiopia-hosted relay pool.
-      pool = poolFor([...cbeRelays()]);
+      //
+      // "Wait as long as it takes": no pool-level total cap (totalTimeoutMs
+      // 0 disables it) — each attempt gets a generous fixed window, since
+      // the relay hops to CBE upstream and can legitimately sit on a slow
+      // request. Attempts are still bounded by RETRY_MAX_ATTEMPTS.
+      pool = poolFor([...cbeRelays()], {
+        totalTimeoutMs: numEnv("CBE_RELAY_TOTAL_TIMEOUT_MS", 0),
+        perAttemptTimeoutMs: numEnv("CBE_RELAY_ATTEMPT_TIMEOUT_MS", 60_000),
+      });
       break;
     case "boa":
       pool = poolFor([directFetchAdapter("boa-direct")]);

@@ -33,9 +33,19 @@ export interface PoolConfig {
   maxAttempts: number;
   /** Delay between retries on the same adapter (ms). Default 1800. */
   retryDelayMs: number;
-  /** Total deadline for the whole pool call (ms). Default 20000. */
+  /**
+   * Total deadline for the whole pool call (ms). 0 disables the pool-level
+   * deadline entirely — attempts run until each adapter's own timeout ends
+   * them ("wait as long as it takes").
+   */
   totalTimeoutMs: number;
-  /** Consecutive failures before an adapter's circuit opens. Default 2. */
+  /**
+   * Fixed per-attempt timeout (ms). When set, every attempt gets exactly
+   * this window; when unset, the pool's total budget is divided by
+   * maxAttempts (bounded 1s..15s) as before.
+   */
+  perAttemptTimeoutMs?: number;
+  /** Consecutive failures before an adapter's circuit opens. Default 4. */
   failureThreshold: number;
   /** Circuit breaker cooldown (ms). Default 60000. */
   cooldownMs: number;
@@ -44,8 +54,8 @@ export interface PoolConfig {
 export const DEFAULT_POOL_CONFIG: PoolConfig = {
   maxAttempts: 4,
   retryDelayMs: 1800,
-  totalTimeoutMs: 20_000,
-  failureThreshold: 2,
+  totalTimeoutMs: 45_000,
+  failureThreshold: 4,
   cooldownMs: 60_000,
 };
 
@@ -75,11 +85,14 @@ export class TransportPool {
    */
   async fetch(url: string): Promise<PoolOutcome> {
     const poolStartedAt = Date.now();
+    // totalTimeoutMs === 0 → no pool-level deadline; each attempt is bounded
+    // only by its own per-attempt timeout.
+    const hasDeadline = this.cfg.totalTimeoutMs > 0;
     const deadline = Date.now() + this.cfg.totalTimeoutMs;
     const adapterErrors: Array<{ id: string; error: string }> = [];
 
     for (const adapter of this.adapters) {
-      if (Date.now() >= deadline) {
+      if (hasDeadline && Date.now() >= deadline) {
         return {
           kind: "exhausted",
           error: "pool total deadline exceeded",
@@ -87,17 +100,16 @@ export class TransportPool {
         };
       }
 
-      const remainingMs = deadline - Date.now();
-      const perAttemptTimeoutMs = Math.max(
-        1_000,
-        Math.min(15_000, Math.floor(remainingMs / this.cfg.maxAttempts)),
-      );
+      const remainingMs = hasDeadline ? deadline - Date.now() : Number.POSITIVE_INFINITY;
+      const perAttemptTimeoutMs =
+        this.cfg.perAttemptTimeoutMs ??
+        Math.max(1_000, Math.min(15_000, Math.floor(remainingMs / this.cfg.maxAttempts)));
 
       let attempt = 0;
       let lastError: TransportError | null = null;
 
       while (attempt < this.cfg.maxAttempts) {
-        if (Date.now() >= deadline) break;
+        if (hasDeadline && Date.now() >= deadline) break;
         attempt += 1;
         try {
           const result = await adapter.fetch(url, { timeoutMs: perAttemptTimeoutMs });
@@ -160,7 +172,11 @@ export class TransportPool {
           }
           // Retryable — wait before the next attempt.
           if (attempt < this.cfg.maxAttempts) {
-            await sleep(Math.min(this.cfg.retryDelayMs, deadline - Date.now()));
+            await sleep(
+              hasDeadline
+                ? Math.min(this.cfg.retryDelayMs, deadline - Date.now())
+                : this.cfg.retryDelayMs,
+            );
           }
         }
       }

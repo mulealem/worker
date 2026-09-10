@@ -282,6 +282,32 @@ async function verifyFromImage(payment: VerifiablePayment): Promise<{
     }
   }
 
+  // CBE app screenshots (receiptType IMAGE) are verified via the QR → CBE
+  // API, full stop. OCR cannot recover anything the QR path couldn't — the
+  // receipt URL exists only inside the QR, and a transaction-number lookup
+  // hits the same relay that just failed — so skip straight to the failure
+  // reason instead of burning OCR time on a doomed path. (SMS screenshots
+  // are different: they carry no QR, so OCR is the only way to read the
+  // reference number — those keep the fallback.)
+  const selectedProvider =
+    payment.bankAccount && payment.receiptType === "IMAGE"
+      ? providerForBankType(payment.bankAccount.type)
+      : null;
+  if (selectedProvider === "cbe") {
+    logv.info(`image path: CBE receipt — OCR fallback skipped (QR/API only)`);
+    if (found.length > 0) {
+      return {
+        data: null,
+        reason: `The receipt could not be verified automatically: ${found.join(", ")}.`,
+      };
+    }
+    return {
+      data: null,
+      reason:
+        "No QR code was found on the receipt. CBE receipts are verified via the QR code on the app's success screen — or submit the transaction number instead.",
+    };
+  }
+
   // Fallback: tesseract.js OCR. Used for Dashen / Awash / BoA / Zemen where
   // the receipt URL is opaque and can't be reconstructed from the ID.
   logv.info(`image path: falling back to tesseract OCR`);

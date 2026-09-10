@@ -64,7 +64,11 @@ const MAX_CONCURRENT_JOBS = Math.max(
  */
 const VERIFIER_JOB_DEADLINE_MS = Math.max(
   30_000,
-  Number(process.env.VERIFIER_JOB_DEADLINE_MS ?? 180_000),
+  // 600s: relayed bank calls are configured to "wait as long as it takes"
+  // (CBE relay: up to 4 attempts x 60s), so the deadline must comfortably
+  // exceed a full retry budget instead of aborting + re-running a
+  // verification that was about to succeed.
+  Number(process.env.VERIFIER_JOB_DEADLINE_MS ?? 600_000),
 );
 
 /** Rejects if `p` hasn't settled within `ms`. The underlying work keeps
