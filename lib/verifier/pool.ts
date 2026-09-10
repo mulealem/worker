@@ -111,6 +111,11 @@ export class TransportPool {
       while (attempt < this.cfg.maxAttempts) {
         if (hasDeadline && Date.now() >= deadline) break;
         attempt += 1;
+        logv.debug(
+          `[transport-pool] adapter=${adapter.id} url=${url} ` +
+            `attempt=${attempt}/${this.cfg.maxAttempts} starting ` +
+            `(timeout=${perAttemptTimeoutMs}ms)`,
+        );
         try {
           const result = await adapter.fetch(url, { timeoutMs: perAttemptTimeoutMs });
           logv.info(
@@ -182,7 +187,10 @@ export class TransportPool {
       }
 
       if (lastError) {
-        adapterErrors.push({ id: adapter.id, error: `${lastError.code}: ${lastError.message}` });
+        adapterErrors.push({
+          id: adapter.id,
+          error: `${lastError.code}: ${lastError.message} (${attempt}/${this.cfg.maxAttempts} attempts)`,
+        });
       }
     }
 

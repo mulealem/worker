@@ -144,9 +144,19 @@ export function getProviderPool(provider: Provider): TransportPool {
       // 0 disables it) — each attempt gets a generous fixed window, since
       // the relay hops to CBE upstream and can legitimately sit on a slow
       // request. Attempts are still bounded by RETRY_MAX_ATTEMPTS.
+      //
+      // Circuit breaker DISABLED (threshold = ∞): the breaker counts
+      // consecutive failures ACROSS runs, so accumulated failures from
+      // earlier verifications used to cut a later run's retries down to a
+      // single attempt. Every verification gets — and logs — its full
+      // retry budget.
       pool = poolFor([...cbeRelays()], {
         totalTimeoutMs: numEnv("CBE_RELAY_TOTAL_TIMEOUT_MS", 0),
         perAttemptTimeoutMs: numEnv("CBE_RELAY_ATTEMPT_TIMEOUT_MS", 60_000),
+        failureThreshold: numEnv(
+          "CBE_RELAY_CIRCUIT_BREAKER_THRESHOLD",
+          Number.POSITIVE_INFINITY,
+        ),
       });
       break;
     case "boa":
