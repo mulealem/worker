@@ -1,9 +1,9 @@
 {
-  "name": "pygate-worker",
+  "name": "payo-worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "PyGate async worker — verifier queue, webhook delivery, and public v1 verify. Stateless compute service: no Drizzle, no R2 credentials, no schema. All state lives on the dashboard; the worker calls back over HTTP for every read and write.",
+  "description": "Payo async worker — verifier queue, webhook delivery, and public v1 verify. Stateless compute service: no Drizzle, no R2 credentials, no schema. All state lives on the dashboard; the worker calls back over HTTP for every read and write.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",

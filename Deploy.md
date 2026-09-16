@@ -1,6 +1,6 @@
 # Deploy — worker (worker.payment.et)
 
-PyGate worker — stateless compute service. OCR, QR, PDF, HMAC webhook
+Payo worker — stateless compute service. OCR, QR, PDF, HMAC webhook
 delivery. No Postgres, no R2, no schema. Push-driven: the dashboard
 POSTs jobs and the worker calls back at
 `/api/internal/worker/*` with a shared bearer token.

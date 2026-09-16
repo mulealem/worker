@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# PyGate worker — stateless compute service (OCR / QR / PDF / HMAC webhooks).
+# Payo worker — stateless compute service (OCR / QR / PDF / HMAC webhooks).
 # No DATABASE_URL, no R2 credentials, no schema. Push-driven: the dashboard
 # POSTs jobs and the worker calls back via /api/internal/worker/* with the
 # shared WORKER_API_TOKEN.

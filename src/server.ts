@@ -1,5 +1,5 @@
 /**
- * PyGate worker — entry point.
+ * Payo worker — entry point.
  *
  * Bootstraps:
  *   1. Environment variables (dotenv) — must happen before the auth module

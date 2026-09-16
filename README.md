@@ -1,6 +1,6 @@
-# pygate/worker
+# payo/worker
 
-Stateless compute service for the PyGate stack. Owns the OCR/QR/PDF/HTML
+Stateless compute service for the Payo stack. Owns the OCR/QR/PDF/HTML
 parsers, the HMAC webhook signing, and the **push-driven** job executor.
 Has **no Drizzle client, no R2 credentials, and no schema files** — every
 read and write goes over HTTP to the dashboard.
@@ -104,4 +104,4 @@ The worker has zero knowledge of the data layer.
 
 ## License
 
-Proprietary — internal PyGate code.
+Proprietary — internal Payo code.
