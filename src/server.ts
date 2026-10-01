@@ -21,6 +21,7 @@ import { verifyRouter } from "./routes/verify.js";
 import { verifierRouter } from "./routes/verifier-run.js";
 import { webhookRouter } from "./routes/webhook-deliver.js";
 import { dispatchRouter } from "./routes/dispatch.js";
+import { scanVerifyRouter } from "./routes/scan-verify.js";
 import { requireWorkerApi } from "./auth.js";
 import { log } from "./log.js";
 import { startWorkers } from "./workers/tick.js";
@@ -62,6 +63,8 @@ app.use("/internal", requireWorkerApi, verifierRouter, webhookRouter);
 // it builds a Router, returns it, and never calls next() or responds, so
 // every authenticated /internal request hangs until the caller times out.
 app.use("/internal", requireWorkerApi, dispatchRouter());
+// Stateless QR scan verification (mobile app): compute-only, no storage.
+app.use("/internal", requireWorkerApi, scanVerifyRouter);
 app.use("/api/v1", requireWorkerApi, verifyRouter);
 app.use("/api/sandbox", requireWorkerApi, verifyRouter);
 

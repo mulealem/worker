@@ -72,12 +72,30 @@ export interface TransportAdapter {
   readonly role: TransportRole;
   readonly label: string;
   /**
+   * Per-adapter circuit-breaker threshold override. When set, the pool uses
+   * this instead of its own `failureThreshold` for this adapter. Used by
+   * composite adapters (the shared relay balancer) that manage breaker state
+   * for their children internally — tripping the composite as a whole would
+   * block every relay at once. `Infinity` disables tripping entirely.
+   */
+  readonly failureThresholdOverride?: number;
+  /**
    * Fetch a URL using this adapter's strategy (direct fetch, regional
    * relay, …). Returns body + status. Throws `TransportError` on failure.
    */
   fetch(url: string, opts?: { timeoutMs?: number }): Promise<AdapterCallResult>;
   stats(): AdapterStats;
 }
+
+/**
+ * Adapter produced by the two factories below: the circuit state is attached
+ * to the object (not just the factory closure) so `tripAdapterCircuit()` can
+ * open the breaker. Deliberately outside `TransportAdapter` — pool-internal
+ * plumbing, not something callers should touch.
+ */
+export type CircuitTrippableAdapter = TransportAdapter & {
+  circuitOpenUntilMsRef: { current: number | null };
+};
 
 /** Common browser-style headers — all transports send these. */
 const DEFAULT_HEADERS: Record<string, string> = {
@@ -98,7 +116,7 @@ const DEFAULT_HEADERS: Record<string, string> = {
 export function directFetchAdapter(
   id: string,
   opts: { defaultTimeoutMs?: number; extraHeaders?: Record<string, string> } = {},
-): TransportAdapter {
+): CircuitTrippableAdapter {
   let totalCalls = 0;
   let totalFailures = 0;
   let consecutiveFailures = 0;
@@ -125,6 +143,10 @@ export function directFetchAdapter(
     id,
     role: "primary",
     label: `Direct: ${id}`,
+    // Attached so pool.ts's tripAdapterCircuit() (cast through unknown) can
+    // open this adapter's circuit. Kept out of the TransportAdapter interface
+    // on purpose — it's pool-internal state.
+    circuitOpenUntilMsRef,
     async fetch(url, opts2) {
       const timeoutMs = opts2?.timeoutMs ?? opts.defaultTimeoutMs ?? 15_000;
       if (circuitOpenUntilMsRef.current !== null && Date.now() < circuitOpenUntilMsRef.current) {
@@ -188,9 +210,10 @@ export function directFetchAdapter(
 /**
  * Regional relay adapter. Talks to a self-hosted relay endpoint deployed in
  * Ethiopia that fetches the upstream URL on our behalf and returns the raw
- * response body. Wire format:
+ * response body. Wire format (provider-agnostic — one endpoint serves every
+ * provider; the relay derives upstream headers from the URL's host):
  *
- *   GET {relayBaseUrl}/{provider}/{reference}
+ *   GET {relayBaseUrl}/relay/{base64url(upstream URL)}
  *   Headers:
  *     x-relay-key: {key}
  *
@@ -203,10 +226,9 @@ export function relayFetchAdapter(
   opts: {
     relayBaseUrl: string;
     key: string;
-    providerSlug: string;
     defaultTimeoutMs?: number;
   },
-): TransportAdapter {
+): CircuitTrippableAdapter {
   const base = opts.relayBaseUrl.replace(/\/+$/, "");
   const logv = log.child({ module: "transport-relay" });
   let totalCalls = 0;
@@ -235,6 +257,8 @@ export function relayFetchAdapter(
     id,
     role: "regional",
     label: `Relay: ${id}`,
+    // See the direct adapter: pool/balancer circuit tripping mutates this.
+    circuitOpenUntilMsRef,
     async fetch(referenceOrUrl, opts2) {
       const timeoutMs = opts2?.timeoutMs ?? opts.defaultTimeoutMs ?? 18_000;
       if (circuitOpenUntilMsRef.current !== null && Date.now() < circuitOpenUntilMsRef.current) {
@@ -249,7 +273,7 @@ export function relayFetchAdapter(
       // uses [A-Za-z0-9-_] + `=` padding and survives every common proxy
       // path filter.
       const encodedRef = Buffer.from(referenceOrUrl, "utf8").toString("base64url");
-      const url = `${base}/${encodeURIComponent(opts.providerSlug)}/${encodedRef}`;
+      const url = `${base}/relay/${encodedRef}`;
       // Log the *exact* outbound URL the worker is about to send. The pool's
       // `[transport-pool] url=…` line shows the upstream argument, not what
       // the adapter fetched — this line is the source of truth for "did the
@@ -263,7 +287,7 @@ export function relayFetchAdapter(
       }
       logv.info(
         `[transport-relay] adapter=${id} outbound=${url} ` +
-          `provider=${opts.providerSlug} upstreamHost=${upstreamHost} ` +
+          `upstreamHost=${upstreamHost} ` +
           `key=${opts.key ? "set" : "missing"}`,
       );
       const startedAt = Date.now();
@@ -290,6 +314,17 @@ export function relayFetchAdapter(
             status: res.status,
             retryable: true,
           });
+        }
+        if (res.status === 404 || res.status === 405) {
+          // The relay answered but has no /relay/ route — it's running the
+          // pre-0.15 provider-segment script. Retryable: the balancer/pool
+          // should fail over to a relay that speaks the current wire format.
+          recordFailure();
+          throw new TransportError(
+            "RELAY_BAD_RESPONSE",
+            `relay has no /relay/ route (${res.status}) — relay script is stale`,
+            { status: res.status, retryable: true },
+          );
         }
         if (!res.ok) {
           recordFailure();

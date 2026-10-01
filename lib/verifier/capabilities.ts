@@ -99,6 +99,24 @@ export const PROVIDER_CAPABILITIES: Record<Provider, ProviderCapabilities> = {
       "For M-Pesa: paste the receipt number from your M-Pesa confirmation.",
     requiresPhoneNumber: false,
   },
+  // No public receipt endpoints known yet — screenshots are accepted for
+  // manual review, but there is no automated transaction-number lookup.
+  siinqee: {
+    image: true,
+    sms: false,
+    transactionNumber: false,
+    transactionNumberHelper:
+      "For Siinqee: paste the transaction reference from your receipt.",
+    requiresPhoneNumber: false,
+  },
+  "kaafi-birr": {
+    image: true,
+    sms: false,
+    transactionNumber: false,
+    transactionNumberHelper:
+      "For Kaafi Birr: paste the transaction reference from your receipt.",
+    requiresPhoneNumber: false,
+  },
 };
 
 /**

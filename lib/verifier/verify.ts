@@ -104,8 +104,12 @@ async function readReceiptBytes(payment: VerifiablePayment): Promise<Buffer> {
 
 /**
  * URL flow — given a known-bank URL, fetch + parse using the right transport.
+ *
+ * Exported for the stateless scan-verify route (`/internal/scan-verify`),
+ * which re-runs this exact pipeline on a QR payload scanned in the field —
+ * no job, no storage, result goes straight back to the caller.
  */
-async function verifyFromUrl(
+export async function verifyFromUrl(
   url: string,
   provider: Provider,
   options?: { phoneNumber?: string | null },
@@ -571,6 +575,14 @@ async function verifyFromTransactionNumber(
     return {
       data: null,
       reason: `No provider mapped for bank type ${bankAccount?.type ?? "<none>"}.`,
+    };
+  }
+  // Banks without a public receipt endpoint can't be looked up
+  // automatically — the receipt still has to be reviewed manually.
+  if (provider === "siinqee" || provider === "kaafi-birr") {
+    return {
+      data: null,
+      reason: `Automated receipt lookup for ${bankAccount?.type ?? provider} is not available yet; the payment will be reviewed manually.`,
     };
   }
   try {

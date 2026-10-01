@@ -162,15 +162,20 @@ export class TransportPool {
             }
             break;
           }
-          // Trip the circuit if we're accumulating failures.
+          // Trip the circuit if we're accumulating failures. An adapter may
+          // override its own threshold: the shared relay balancer manages
+          // per-relay breakers internally and must never be tripped as a
+          // whole (that would block every relay for the cooldown at once).
           const s = adapter.stats();
-          if (s.consecutiveFailures >= this.cfg.failureThreshold) {
+          const threshold =
+            adapter.failureThresholdOverride ?? this.cfg.failureThreshold;
+          if (s.consecutiveFailures >= threshold) {
             tripAdapterCircuit(adapter, this.cfg.cooldownMs);
             adapterErrors.push({ id: adapter.id, error: "circuit opened" });
             logv.warn(
               `[transport-pool] circuit OPENED adapter=${adapter.id} after ` +
                 `${s.consecutiveFailures} consecutive failures ` +
-                `(threshold=${this.cfg.failureThreshold}, cooldown=${this.cfg.cooldownMs}ms) — ` +
+                `(threshold=${threshold}, cooldown=${this.cfg.cooldownMs}ms) — ` +
                 `subsequent calls skip this adapter until the cooldown ends`,
             );
             break;

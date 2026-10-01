@@ -8,7 +8,7 @@
  * browser.
  */
 
-export type BankType = "CBE" | "TELEBIRR" | "ABYSSINIA" | "DASHEN" | "AWASH" | "ZEMEN" | "CBE_BIRR" | "MPESA" | "OTHER";
+export type BankType = "CBE" | "TELEBIRR" | "ABYSSINIA" | "DASHEN" | "AWASH" | "ZEMEN" | "CBE_BIRR" | "MPESA" | "SIINQEE" | "KAAFI_BIRR" | "OTHER";
 import type { Provider } from "./types.js";
 
 export function providerForBankType(bankType: BankType | string): Provider | null {
@@ -29,6 +29,10 @@ export function providerForBankType(bankType: BankType | string): Provider | nul
       return "cbe-birr";
     case "MPESA":
       return "mpesa";
+    case "SIINQEE":
+      return "siinqee";
+    case "KAAFI_BIRR":
+      return "kaafi-birr";
     case "OTHER":
       return null;
     default:

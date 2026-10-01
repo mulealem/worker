@@ -11,7 +11,9 @@ export type Provider =
   | "awash"
   | "zemen"
   | "cbe-birr"
-  | "mpesa";
+  | "mpesa"
+  | "siinqee"
+  | "kaafi-birr";
 
 export interface ReceiptData {
   provider: Provider;
