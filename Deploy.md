@@ -34,8 +34,22 @@ POSTs jobs and the worker calls back at
 | `PORT` | `3004` | |
 | `DASHBOARD_URL` | `https://dashboard.payment.et` | **No trailing slash.** The worker calls back at this URL. |
 | `WORKER_API_TOKEN` | *(same value as the dashboard's `WORKER_API_TOKEN`)* | 32-byte hex string. |
+| `RELAY_SHARED_KEY` | *(same value as every relay's `RELAY_SHARED_KEY`)* | `openssl rand -hex 32`. The `x-relay-key` secret shared with the Ethiopia relay fleet. |
+| `RELAYS` | `https://payment.com.et,https://relay2…,…` | Comma-separated relay base URLs — all providers share this one round-robin pool. Per-relay key override: `url\|key` entries. |
 | `LOG_JSON` | `1` | Optional. JSON log lines for Coolify's log viewer. |
 | `WORKER_HEARTBEAT_MS` | `10000` | Optional. Fire-and-forget heartbeats to the dashboard for observability. **State never lives here.** |
+| `RELAY_CIRCUIT_BREAKER_THRESHOLD` / `RELAY_CIRCUIT_BREAKER_COOLDOWN_MS` | `4` / `60000` | Optional. Skip a failing relay after N consecutive failures, for this long. |
+
+### Relay fleet
+
+CBE is relay-**only** (geo-blocked from the worker host); Telebirr / M-Pesa
+fall back to the pool behind their direct adapter. The relays are the Plesk
+`app.js` deployments in Ethiopia (`aihuck/plesk_nodejs`) — they must run
+**v0.15+** (unified `GET /relay/{base64url}` endpoint) before the worker
+points at them. To scale, deploy the same script to a new box and append its
+URL to `RELAYS`; the balancer spreads requests across every healthy relay.
+The legacy `TELEBIRR_/CBE_/MPESA_RELAY_URL_n` variables are no longer read —
+remove them from this resource if they're still set.
 
 ## First deploy
 
