@@ -111,6 +111,16 @@ describe("buildMerchantPresented", () => {
     expect(() => buildMerchantPresented({ ...base, amount: "1,000" })).toThrow(/amount/);
     expect(() => buildMerchantPresented({ ...base, currency: "840" })).toThrow(/currency/);
   });
+
+  it("rejects non-ASCII names/cities (byte-length TLV would lie)", () => {
+    // Kept in lockstep with flutter-version/test/ethqr_test.dart.
+    expect(() =>
+      buildMerchantPresented({ ...base, merchantName: "ጥደሮስ ስፒሰስ" }),
+    ).toThrow(/Latin/);
+    expect(() =>
+      buildMerchantPresented({ ...base, merchantCity: "አዲስ አበባ" }),
+    ).toThrow(/Latin/);
+  });
 });
 
 describe("decodeQrPayload", () => {

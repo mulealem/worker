@@ -204,19 +204,38 @@ const ISO4217_NUMERIC = new Set([
   "230", // ETB — the only currency this product settles in, kept explicit
 ]);
 
+/** Spec fields are byte-length-prefixed ASCII; see buildMerchantPresented. */
+function isPrintableAscii(value: string): boolean {
+  return /^[\x20-\x7e]*$/.test(value);
+}
+
 export function buildMerchantPresented(input: MerchantPresentedInput): string {
   const bic = input.bic.trim();
   if (bic.length !== 8 && bic.length !== 11) {
     throw new Error(`BIC must be 8 or 11 characters, got ${bic.length}`);
   }
+  if (!isPrintableAscii(bic)) throw new Error("BIC must be ASCII characters");
   const account = input.accountNumber.trim();
   if (!account || account.length > 24) {
     throw new Error(`merchant account must be 1–24 characters, got ${account.length}`);
   }
+  if (!isPrintableAscii(account)) {
+    throw new Error("merchant account must be ASCII characters");
+  }
   const name = input.merchantName.trim();
   if (!name || name.length > 25) throw new Error("merchant name must be 1–25 characters");
+  // A non-ASCII name/city would encode the TLV lengths (and the CRC) over
+  // UTF-16 code units no byte-oriented payer app can reproduce — fail loudly
+  // instead of minting a broken QR (kept in lockstep with
+  // flutter-version/lib/src/qr/ethqr.dart).
+  if (!isPrintableAscii(name)) {
+    throw new Error("merchant name must use Latin (A–Z) characters for the QR code");
+  }
   const city = input.merchantCity.trim();
   if (!city || city.length > 15) throw new Error("merchant city must be 1–15 characters");
+  if (!isPrintableAscii(city)) {
+    throw new Error("merchant city must use Latin (A–Z) characters for the QR code");
+  }
   const mcc = (input.merchantCategoryCode ?? "5999").trim();
   if (!/^\d{4}$/.test(mcc)) throw new Error(`MCC must be 4 digits, got "${mcc}"`);
   const currency = (input.currency ?? "230").trim();
@@ -234,8 +253,17 @@ export function buildMerchantPresented(input: MerchantPresentedInput): string {
     encodeTlv("02", account);
 
   const addlParts: string[] = [];
-  if (input.referenceLabel) addlParts.push(encodeTlv("05", input.referenceLabel.slice(0, 25)));
+  if (input.referenceLabel) {
+    const clipped = input.referenceLabel.slice(0, 25);
+    if (!isPrintableAscii(clipped)) {
+      throw new Error("reference label must be ASCII characters");
+    }
+    addlParts.push(encodeTlv("05", clipped));
+  }
   const purpose = (input.purposeOfTransaction ?? "P2M").trim();
+  if (purpose && !isPrintableAscii(purpose)) {
+    throw new Error("purpose of transaction must be ASCII characters");
+  }
   if (purpose) addlParts.push(encodeTlv("08", purpose.slice(0, 25)));
   const addl = addlParts.length > 0 ? addlParts.join("") : "";
 
